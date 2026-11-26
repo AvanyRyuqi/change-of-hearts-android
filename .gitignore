@@ -1,0 +1,110 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# PyInstaller build artefacts (keep the product .spec)
+PyInstaller-*.txt
+*.manifest
+build_pyi/
+dist_build/
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Virtual environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Local scratch dirs & internal engineering (never ship to GitHub)
+diff/
+tools/
+research/
+dev/
+scratch/
+scratch_audit/
+p5r-game-client/
+releases/
+memory/
+archive/
+
+# Temporary script scratches (while scripts/check-invariants.py stays tracked)
+scripts/scratch/
+tools/scratch/
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Local-only agent handoff doc (never ships to GitHub)
+HANDOFF.md
+HANDOFF_*.md
+HERMES_*.md
+screenshots/
+*.zip
+*.DAT
+*.dat
+test_visual*.py
+patch_notes_*.md
+
+# Local agent tooling & tests cache
+.dsh-vision-toolkit/
+.pytest_cache/
+
+# UI reference: raw 79MB screenshot corpus stays local; contact sheets + spec are tracked
+design/reference/*.jpg
+design/reference/urls.txt
+design/reference/gud_index.md
+
+# unlazy session ledgers (local-only artifacts)
+.unlazy/
+GATES.md
+# Secrets, Credentials & Local Environment Files (Strict Firewall)
+.env*
+*.env
+*.pem
+*.key
+*secret*
+*credentials*
+*service_account*.json
+
+# Large Raw Binary Dumps & Traces
+*.bin
+*.dump
+*.raw
+*.trace

@@ -1,0 +1,27 @@
+{
+  "schema_version": 2,
+  "project": "p5r-save-editor",
+  "phase": "implementation",
+  "gate": "ready",
+  "mode": "single-agent",
+  "version": "v1.1.2",
+  "pinned_shas": {},
+  "last_session": "memory/2026-10-05-reddit-bugfix-faq.md",
+  "updated_at": "2026-10-11T18:25:00Z",
+  "check_commands": [
+    ["python", "-m", "unittest", "discover", "-s", "tests"]
+  ],
+  "test_count": 188,
+  "banned_patterns": [
+    ["slotIdx\\s*<\\s*30", "Quick-array 30-slot cap (was silently dropping items)"],
+    ["0x3530.*merge|merge.*0x3530", "Quick-array merge (never merge with master counts)"],
+    ["PS4.*offset|KHSaveEditor", "PS4 offset reference (PC != PS4)"]
+  ],
+  "human_gate": "none",
+  "blockers": [],
+  "next_action": "Resume Ground-Up Redesign on redesign/p5r-native-menu",
+  "active_owners": [],
+  "frozen_offsets": [
+    "0xA000+ Outfits save wiring (D008 — read-only in UI)"
+  ]
+}

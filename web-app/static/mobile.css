@@ -1,0 +1,194 @@
+/* =========================================================================
+   MOBILE LAYOUT (phones / narrow windows) — loaded with media="(max-width:820px)"
+   Desktop layout is untouched. Sidebar becomes a bottom tab bar, the save
+   strip stacks, and multi-column grids collapse to one column.
+   ========================================================================= */
+html { -webkit-text-size-adjust: 100%; -webkit-tap-highlight-color: transparent; }
+
+body {
+  flex-direction: column;
+  min-height: 100vh;
+  min-height: 100dvh;
+  background-attachment: scroll;
+  padding-bottom: calc(72px + env(safe-area-inset-bottom, 0px));
+}
+
+/* ---- Sidebar -> compact top brand bar + fixed bottom tab bar ---- */
+.p5-sidebar { display: contents; }
+.p5-sidebar::before { display: none; }
+
+.p5-sidebar-header {
+  order: 0;
+  margin: 0;
+  padding: calc(env(safe-area-inset-top, 0px) + 8px) 14px 8px;
+  clip-path: none;
+  box-shadow: 0 3px 14px rgba(230, 0, 18, 0.55);
+}
+.p5-sidebar-header::after { display: none; }
+.p5-sidebar-header .brand-badge img { width: 40px !important; height: 40px !important; }
+.p5-sidebar-header .brand-text { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px; }
+.p5-sidebar-header .brand-text h1 { font-size: 20px !important; line-height: 1 !important; transform: none; }
+.p5-sidebar-header .brand-text > div { display: none; }
+
+.p5-main-stage { order: 1; min-height: 0; overflow: visible; overflow-x: clip; max-width: 100%; }
+
+.p5-nav-list {
+  position: fixed;
+  left: 0; right: 0; bottom: 0;
+  z-index: 500;
+  flex-direction: row;
+  gap: 6px;
+  padding: 8px 8px calc(8px + env(safe-area-inset-bottom, 0px));
+  background: #0A0A0F;
+  border-top: 3px solid var(--p5-crimson);
+  box-shadow: 0 -6px 24px rgba(0, 0, 0, 0.8);
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+}
+.p5-nav-list::-webkit-scrollbar { display: none; }
+
+.p5-nav-item,
+.p5-nav-item.active {
+  flex: 0 0 auto;
+  min-width: 84px;
+  max-width: 108px;
+  padding: 6px 8px;
+  font-size: 10px;
+  letter-spacing: 0.5px;
+  line-height: 1.15;
+  transform: none;
+  box-shadow: 2px 2px 0 #000;
+  justify-content: center;
+  text-align: center;
+}
+.p5-nav-item.active { box-shadow: 3px 3px 0 var(--p5-blue), 5px 5px 0 #000; }
+.p5-nav-item span,
+.p5-nav-item.active span {
+  transform: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  font-weight: 800;
+  white-space: normal;
+}
+.p5-nav-item.active::after { display: none; }
+.p5-nav-item .nav-ico { width: 18px; height: 18px; flex: none; }
+
+.p5-sidebar-footer {
+  order: 2;
+  margin-top: 0;
+  padding: 14px 14px 18px;
+}
+
+/* ---- Top save strip ---- */
+.p5-top-strip {
+  position: static;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+  padding: 12px 14px;
+}
+.save-selector-box {
+  flex-wrap: wrap;
+  gap: 8px;
+  max-width: none;
+  width: 100%;
+}
+.save-selector-box .p5-select { flex: 1 1 100% !important; min-width: 0; width: 100%; }
+.save-selector-box .p5-btn-action { flex: 1 1 auto; min-height: 44px; }
+.p5-top-strip > div:last-child { flex-wrap: wrap; gap: 4px 14px !important; justify-content: space-between; font-size: 11px !important; }
+.p5-top-strip .top-ico { display: inline-block; width: 13px; height: 13px; vertical-align: -2px; }
+
+/* ---- Stages ---- */
+.p5-stage-view { padding: 16px 12px 24px; min-width: 0; }
+.stage-headline { margin-bottom: 16px; }
+.stage-headline h2 {
+  font-size: 22px;
+  letter-spacing: 1.5px;
+  padding: 4px 10px 2px;
+  text-shadow: 2px 2px 0 #000, 3px 3px 0 var(--stage-accent);
+  box-shadow: 3px 3px 0 #000;
+  max-width: 100%;
+}
+.stage-headline p { font-size: 12px; }
+
+.p5-card { padding: 14px; box-shadow: 4px 4px 0 #000; min-width: 0; }
+.p5-card-header { font-size: 18px; flex-wrap: wrap; gap: 4px 10px; }
+
+.grid-2, .grid-3,
+.p5-coop-container,
+.velvet-stage-grid,
+div[style*="grid-template-columns: 1.4fr 1fr"] {
+  grid-template-columns: minmax(0, 1fr) !important;
+  gap: 14px !important;
+}
+.character-stage-card { height: auto; min-height: 380px; }
+/* Confidant spotlight card */
+.spotlight-header-card { flex-direction: column; gap: 14px; }
+.spotlight-portrait-frame { width: 100%; min-width: 0; height: 260px; }
+.spotlight-dossier-grid { grid-template-columns: minmax(0, 1fr) !important; gap: 12px; }
+div[style*="grid-template-columns:1fr 1fr"],
+div[style*="grid-template-columns: 1fr 1fr"] { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) !important; }
+.dossier-panel { min-width: 0; overflow-wrap: anywhere; }
+
+#compendiumGrid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)) !important; max-height: none !important; }
+#elementalAffinitiesGrid { gap: 2px !important; }
+#elementalAffinitiesGrid > * { font-size: 9px; min-width: 0; }
+
+/* Wide content scrolls inside its own box instead of widening the page. */
+table { display: block; max-width: 100%; overflow-x: auto; }
+pre, code { white-space: pre-wrap; word-break: break-word; }
+img { max-width: 100%; }
+
+/* ---- Re-sign deck: float just above the bottom tab bar ---- */
+.p5-save-deck {
+  bottom: calc(var(--nav-h, 76px) + env(safe-area-inset-bottom, 0px));
+  padding: 8px 12px;
+  gap: 8px;
+  flex-wrap: wrap;
+  z-index: 400;
+}
+.p5-save-deck > div { min-width: 0; }
+.p5-save-deck > div:first-child { flex: 1 1 100%; }
+.p5-save-deck > div:last-child { flex: 1 1 100%; flex-wrap: wrap; }
+#bottomStatus { font-size: 12px !important; line-height: 1.3; overflow-wrap: anywhere; }
+.save-deck-btn {
+  flex: 1 1 auto;
+  padding: 10px 12px;
+  font-size: 15px;
+  letter-spacing: 1px;
+  transform: none;
+  box-shadow: 3px 3px 0 #000;
+}
+.save-deck-btn span { transform: none; }
+.save-deck-btn:hover { transform: none; }
+
+/* Inline flex rows may wrap rather than push the page wider. */
+div[style*="display:flex"]:not([style*="flex-direction"]),
+div[style*="display: flex"]:not([style*="flex-direction"]) { flex-wrap: wrap; }
+.p5-btn-action { max-width: 100%; }
+
+/* ---- Touch ergonomics ---- */
+.p5-btn-action, button { min-height: 40px; touch-action: manipulation; }
+.p5-input, .p5-select, input, select, textarea { font-size: 16px !important; min-height: 42px; max-width: 100%; }
+input[type="checkbox"], input[type="radio"] { min-height: 0; }
+
+/* ---- Modals ---- */
+.p5-modal-backdrop { align-items: flex-start; overflow-y: auto; padding: calc(env(safe-area-inset-top, 0px) + 12px) 0 24px; }
+.p5-modal-content { width: calc(100% - 20px); max-width: none !important; padding: 16px; box-shadow: 6px 6px 0 #000; max-height: calc(100vh - 32px) !important; max-height: calc(100dvh - 32px) !important; }
+
+/* Hover-only spotlight makes no sense on touch. */
+#personaArtSpotlight { display: none !important; }
+
+/* ---- Android shell: the Steam save dropdown/rescan are PC-only ---- */
+html.is-android .save-selector-box #saveFileDropdown,
+html.is-android .save-selector-box [onclick^="loadSaveFile"],
+html.is-android .save-selector-box [onclick^="refreshDiscovery"] { display: none !important; }
+html.is-android .save-selector-box [onclick*="manualFileInput"] {
+  flex: 2 1 60%;
+  background: var(--p5-crimson);
+  color: #fff;
+  border-color: #000;
+}

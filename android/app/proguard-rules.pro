@@ -1,0 +1,2 @@
+-keep class com.chaquo.python.** { *; }
+-keepclassmembers class com.changeofheart.p5r.NativeBridge { @android.webkit.JavascriptInterface <methods>; }
