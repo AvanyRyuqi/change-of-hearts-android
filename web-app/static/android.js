@@ -232,3 +232,86 @@
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
   else init();
 })();
+
+/* =========================================================================
+   SKILL SEARCH — kotak cari untuk 8 slot "Learned Skills" (Velvet Room).
+   Mengetik akan mempersempit daftar di semua slot (nama, elemen, biaya, atau ID).
+   Skill yang sedang terpasang selalu tetap ada, jadi data tidak berubah.
+   Ditambahkan di akhir android.js. Tidak mengubah logika editor.
+   ========================================================================= */
+(function () {
+  "use strict";
+
+  function init() {
+    const grid = document.getElementById("skillsGrid");
+    if (!grid || document.getElementById("skillSearchInput")) return;
+
+    const wrap = document.createElement("div");
+    wrap.style.cssText = "display:flex; align-items:center; gap:6px; margin-bottom:6px;";
+    wrap.innerHTML =
+      '<input id="skillSearchInput" type="search" class="p5-input" ' +
+      'placeholder="Search skill (name, element, ID) e.g. Mabufu, Fire, Recarm…" ' +
+      'autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="search" ' +
+      'style="flex:1; min-width:0; font-size:13px; padding:6px 10px;">' +
+      '<span id="skillSearchCount" style="font-size:10px; color:var(--p5-muted, #8E8E9F); white-space:nowrap;"></span>';
+    grid.parentNode.insertBefore(wrap, grid);
+
+    const input = document.getElementById("skillSearchInput");
+    const count = document.getElementById("skillSearchCount");
+
+    function matches(opt, tokens) {
+      if (!tokens.length || opt.v === "0") return true;
+      const text = opt.t.toLowerCase();
+      return tokens.every((k) => text.includes(k) || opt.v === k);
+    }
+
+    function apply() {
+      const tokens = input.value.toLowerCase().split(/\s+/).filter(Boolean);
+      let shown = 0;
+      let total = 0;
+      let first = true;
+
+      grid.querySelectorAll("select").forEach((sel) => {
+        // simpan daftar lengkap sekali per select (renderSkillsGrid membuat select baru)
+        if (!sel._skillAll) {
+          sel._skillAll = Array.from(sel.options).map((o) => ({ v: o.value, t: o.textContent }));
+        }
+        const all = sel._skillAll;
+        const cur = sel.value;
+        const keep = all.filter((o) => o.v === cur || matches(o, tokens));
+
+        const frag = document.createDocumentFragment();
+        keep.forEach((o) => {
+          const op = document.createElement("option");
+          op.value = o.v;
+          op.textContent = o.t;
+          frag.appendChild(op);
+        });
+        sel.innerHTML = "";
+        sel.appendChild(frag);
+        sel.value = cur;
+
+        if (first) {
+          first = false;
+          total = all.filter((o) => o.v !== "0").length;
+          shown = all.filter((o) => o.v !== "0" && matches(o, tokens)).length;
+        }
+      });
+
+      count.textContent = tokens.length ? `${shown} / ${total}` : "";
+    }
+
+    let timer = null;
+    input.addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(apply, 100); });
+    input.addEventListener("keydown", (ev) => {
+      if (ev.key === "Escape") { input.value = ""; apply(); }
+    });
+
+    // Terapkan ulang filter setiap kali grid skill dibangun ulang (ganti persona/member).
+    new MutationObserver(() => apply()).observe(grid, { childList: true });
+    apply();
+  }
+
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
+  else init();
+})();
