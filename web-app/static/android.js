@@ -315,3 +315,218 @@
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
   else init();
 })();
+
+/* =========================================================================
+   SAVE FOLDER (Android) — baca save langsung dari folder game dan timpa
+   file yang sama saat "SAVE CHANGES & RE-SIGN".
+   Default: /storage/emulated/0/Persona 5 Royal/user/save
+   Hanya aktif di app Android (butuh AndroidBridge.listSaves dari build baru).
+   Ditambahkan di akhir android.js.
+   ========================================================================= */
+(function () {
+  "use strict";
+
+  const B = window.AndroidBridge;
+  if (!B || typeof B.listSaves !== "function") return;
+
+  let linked = null;        // { path, rel, name } — file game yang sedang diedit
+  let loadingLinked = false;
+
+  const status = (m) => { if (typeof setStatus === "function") setStatus(m); };
+  const call = (fn, ...args) => {
+    try { return JSON.parse(B[fn](...args)); }
+    catch (e) { return { ok: false, error: String(e) }; }
+  };
+  const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const fmtKB = (n) => (n >= 1048576 ? (n / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(n / 1024)) + " KB");
+
+  const CSS = `
+  #gsOverlay { position: fixed; inset: 0; z-index: 900; background: rgba(0,0,0,.72); display: flex; align-items: flex-end; justify-content: center; }
+  #gsOverlay[hidden] { display: none; }
+  #gsPanel { width: 100%; max-width: 560px; max-height: 80vh; display: flex; flex-direction: column; background: #0E0E14;
+    border: 2px solid var(--p5-crimson, #E31500); box-shadow: 0 -4px 0 #000; }
+  #gsHead { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-bottom: 2px solid #1c1c28; }
+  #gsHead b { flex: 1; font-size: 14px; color: #fff; letter-spacing: 1px; }
+  #gsRoot { padding: 6px 10px; font-size: 10px; color: var(--p5-muted, #8E8E9F); word-break: break-all; border-bottom: 1px solid #1c1c28; }
+  #gsBody { overflow-y: auto; padding: 4px 0; }
+  .gs-msg { padding: 14px 12px; font-size: 12px; color: #fff; line-height: 1.5; }
+  .gs-row { display: flex; align-items: center; gap: 8px; padding: 9px 12px; border-bottom: 1px solid #1c1c28; cursor: pointer; font-size: 12px; color: #fff; }
+  .gs-row:hover, .gs-row:active { background: #1a1a28; }
+  .gs-row .gs-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 700; }
+  .gs-row .gs-meta { flex: none; font-size: 10px; color: var(--p5-muted, #8E8E9F); text-align: right; }
+  .gs-row.gs-on { border-left: 3px solid var(--p5-yellow, #FFE600); background: #16161f; }
+  `;
+
+  function getOverlay() {
+    let ov = document.getElementById("gsOverlay");
+    if (ov) return ov;
+    const st = document.createElement("style");
+    st.textContent = CSS;
+    document.head.appendChild(st);
+
+    ov = document.createElement("div");
+    ov.id = "gsOverlay";
+    ov.hidden = true;
+    ov.innerHTML =
+      '<div id="gsPanel">' +
+      '<div id="gsHead"><b>GAME SAVES</b>' +
+      '<button class="p5-btn-action secondary" id="gsFolder"><span>FOLDER</span></button>' +
+      '<button class="p5-btn-action secondary" id="gsRefresh"><span>REFRESH</span></button>' +
+      '<button class="p5-btn-action secondary" id="gsClose"><span>✕</span></button></div>' +
+      '<div id="gsRoot"></div><div id="gsBody"></div></div>';
+    document.body.appendChild(ov);
+
+    ov.addEventListener("click", (ev) => { if (ev.target === ov) closeSheet(); });
+    document.getElementById("gsClose").addEventListener("click", closeSheet);
+    document.getElementById("gsRefresh").addEventListener("click", refreshList);
+    document.getElementById("gsFolder").addEventListener("click", () => {
+      const cur = B.getSaveRoot();
+      const v = window.prompt("Save folder path:", cur);
+      if (v && v.trim()) { B.setSaveRoot(v.trim()); refreshList(); }
+    });
+    return ov;
+  }
+
+  function closeSheet() { getOverlay().hidden = true; }
+  function openSheet() { getOverlay().hidden = false; refreshList(); }
+
+  function showMsg(html) { document.getElementById("gsBody").innerHTML = '<div class="gs-msg">' + html + "</div>"; }
+
+  function refreshList() {
+    const body = document.getElementById("gsBody");
+    document.getElementById("gsRoot").textContent = B.getSaveRoot();
+    body.innerHTML = '<div class="gs-msg">Scanning…</div>';
+
+    const r = call("listSaves", B.getSaveRoot());
+    if (!r.ok) {
+      if (r.error === "no_access") {
+        showMsg(
+          "To read and overwrite saves directly, the app needs <b>All files access</b> (one time).<br>" +
+          '<button class="p5-btn-action" id="gsGrant" style="margin-top:10px;"><span>GRANT ACCESS</span></button>'
+        );
+        document.getElementById("gsGrant").addEventListener("click", () => {
+          const res = B.requestStorageAccess();
+          if (res !== "ok") showMsg(esc(res));
+        });
+      } else {
+        showMsg("⚠ " + esc(r.error || "Unknown error") + "<br><br>Use <b>FOLDER</b> to change the path.");
+      }
+      return;
+    }
+    if (!r.files.length) {
+      showMsg("No save files found in this folder.<br><br>Use <b>FOLDER</b> to point to the right path.");
+      return;
+    }
+    document.getElementById("gsRoot").textContent = r.root;
+    body.innerHTML = "";
+    r.files.forEach((f) => {
+      const row = document.createElement("div");
+      row.className = "gs-row" + (linked && linked.path === f.path ? " gs-on" : "");
+      row.innerHTML =
+        '<span class="gs-name">' + esc(f.rel) + "</span>" +
+        '<span class="gs-meta">' + fmtKB(f.size) + "<br>" + esc(new Date(f.modified).toLocaleString()) + "</span>";
+      row.addEventListener("click", () => loadLinked(f));
+      body.appendChild(row);
+    });
+  }
+
+  function loadLinked(f) {
+    const r = call("readSave", f.path);
+    if (!r.ok) { showMsg("⚠ " + esc(r.error || "Could not read file")); return; }
+
+    const bin = atob(r.data);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const file = new File([bytes], f.name, { type: "application/octet-stream" });
+
+    const input = document.getElementById("manualFileInput");
+    if (!input) { showMsg("⚠ Editor file input not found."); return; }
+
+    closeSheet();
+    linked = { path: f.path, rel: f.rel, name: f.name };
+    updateButton();
+
+    const dt = new DataTransfer();
+    dt.items.add(file);
+    input.files = dt.files;
+    loadingLinked = true;
+    try { input.dispatchEvent(new Event("change", { bubbles: true })); }
+    finally { loadingLinked = false; }
+    status("Loading " + f.rel + " from the game folder…");
+  }
+
+  function updateButton() {
+    const b = document.getElementById("gameSavesBtn");
+    if (!b) return;
+    const span = b.querySelector("span");
+    if (span) span.textContent = linked ? "📁 " + linked.rel : "📁 GAME SAVES";
+    b.title = linked ? "Saving will overwrite: " + linked.path : "Open a save directly from the game folder";
+  }
+
+  function readB64(blob) {
+    return new Promise((resolve, reject) => {
+      const fr = new FileReader();
+      fr.onload = () => resolve(String(fr.result).split(",")[1] || "");
+      fr.onerror = () => reject(fr.error);
+      fr.readAsDataURL(blob);
+    });
+  }
+
+  // Saat editor "mengunduh" save hasil re-sign -> timpa file game (ZIP backup tetap ke Downloads).
+  const prevClick = HTMLAnchorElement.prototype.click;
+  HTMLAnchorElement.prototype.click = function () {
+    const href = this.href || "";
+    const name = this.getAttribute("download") || "";
+    if (linked && this.hasAttribute("download") && href.indexOf("blob:") === 0 && !/\.zip$/i.test(name)) {
+      const target = linked;
+      fetch(href)
+        .then((r) => r.blob())
+        .then(readB64)
+        .then((b64) => {
+          const res = call("writeSave", target.path, b64);
+          if (res.ok) status("✔ Saved directly to " + target.rel + " — old file backed up as " + res.backup);
+          else status("⚠ Could not overwrite " + target.rel + ": " + (res.error === "no_access" ? "file access was revoked" : res.error));
+          if (!res.ok) window.alert("Could not overwrite " + target.rel + ":\n" + (res.error || "unknown error"));
+        })
+        .catch((err) => status("⚠ Could not overwrite " + target.rel + ": " + err));
+      return;
+    }
+    return prevClick.apply(this, arguments);
+  };
+
+  // Teks alert lama bilang "downloaded"; ganti agar sesuai.
+  const prevAlert = window.alert;
+  window.alert = function (msg) {
+    if (linked && /Save successful!/.test(String(msg))) {
+      msg = "★ Re-signed! Overwriting " + linked.rel + " in the game folder. The old file is backed up in Download/ChangeOfHeart/backup.";
+    }
+    return prevAlert.call(window, msg);
+  };
+
+  // Kalau pengguna memilih file lain secara manual, lepaskan tautan ke file game.
+  document.addEventListener("change", (ev) => {
+    if (ev.target && ev.target.id === "manualFileInput" && !loadingLinked) { linked = null; updateButton(); }
+  }, true);
+  // Kembali dari layar izin Android -> segarkan daftar.
+  document.addEventListener("visibilitychange", () => {
+    const ov = document.getElementById("gsOverlay");
+    if (!document.hidden && ov && !ov.hidden) refreshList();
+  });
+
+  function init() {
+    if (document.getElementById("gameSavesBtn")) return;
+    const box = document.querySelector(".save-selector-box");
+    if (!box) return;
+    const btn = document.createElement("button");
+    btn.id = "gameSavesBtn";
+    btn.className = "p5-btn-action";
+    btn.innerHTML = "<span>📁 GAME SAVES</span>";
+    btn.addEventListener("click", openSheet);
+    box.insertBefore(btn, box.firstChild);
+    const dd = document.getElementById("saveFileDropdown");
+    if (dd) dd.addEventListener("change", () => { linked = null; updateButton(); });
+  }
+
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
+  else init();
+})();
