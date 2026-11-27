@@ -1,4 +1,3 @@
-import java.io.File
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
@@ -25,7 +24,7 @@ abstract class BundleBackendTask : DefaultTask() {
     fun bundle() {
         val root = repoRoot.get().asFile
         val out = outDir.get().asFile.also { it.mkdirs() }
-        ZipOutputStream(File(out, "p5r_backend.zip").outputStream().buffered()).use { zos ->
+        ZipOutputStream(java.io.File(out, "p5r_backend.zip").outputStream().buffered()).use { zos ->
             sources.files.filter { it.isFile }.sortedBy { it.invariantSeparatorsPath }.forEach { f ->
                 zos.putNextEntry(ZipEntry(f.relativeTo(root).invariantSeparatorsPath))
                 f.inputStream().use { it.copyTo(zos) }
@@ -43,13 +42,27 @@ android {
         applicationId = "com.changeofheart.p5r"
         minSdk = 29
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.1.2-android"
+        // CI bumps this on every run so each new APK installs over the previous one.
+        versionCode = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1
+        versionName = "1.1.2-android.$versionCode"
         ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
     }
 
+    // One fixed key for every build (local and CI). Android only allows an update
+    // over an installed app if the signature matches, so never regenerate this file.
+    signingConfigs {
+        create("shared") {
+            storeFile = file("release.keystore")
+            storePassword = "changeofheart"
+            keyAlias = "changeofheart"
+            keyPassword = "changeofheart"
+        }
+    }
+
     buildTypes {
+        debug { signingConfig = signingConfigs.getByName("shared") }
         release {
+            signingConfig = signingConfigs.getByName("shared")
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }

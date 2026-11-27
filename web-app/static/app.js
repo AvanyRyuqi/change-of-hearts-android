@@ -718,7 +718,7 @@ function renderActiveMember() {
     }
 
     document.getElementById("personaLevel").value = pers.level || 1;
-    document.getElementById("personaTraitSelect").value = pers.trait_id || 0;
+    setTraitValue(pers.trait_id || 0);
 
     const lockNote = document.getElementById("personaLockNote");
     if (lockNote) {
@@ -836,7 +836,7 @@ function loadPersonaIntoDeck(stockIdx) {
   if (isEmpty) {
     document.getElementById("personaSelect").value = 0;
     document.getElementById("personaLevel").value = 0;
-    document.getElementById("personaTraitSelect").value = 0;
+    setTraitValue(0);
 
     document.getElementById("stat_st").value = 0;
     document.getElementById("stat_ma").value = 0;
@@ -849,7 +849,7 @@ function loadPersonaIntoDeck(stockIdx) {
   } else {
     document.getElementById("personaSelect").value = entry.persona_id;
     document.getElementById("personaLevel").value = entry.level || 1;
-    document.getElementById("personaTraitSelect").value = entry.trait_id || 0;
+    setTraitValue(entry.trait_id || 0);
 
     const st = entry.stats || [10, 10, 10, 10, 10];
     document.getElementById("stat_st").value = st[0] || 10;
@@ -1019,16 +1019,37 @@ function populatePersonaDropdown() {
   });
 }
 
-function populateTraitDropdown() {
+function populateTraitDropdown(filter = "") {
   const select = document.getElementById("personaTraitSelect");
   if (!select) return;
+  const keep = select.value || "0";
+  const q = String(filter || "").trim().toLowerCase();
   select.innerHTML = `<option value="0">-- None / Default --</option>`;
   (DB.traits || []).forEach((t) => {
+    // Always keep the currently selected trait in the list so filtering never changes the value.
+    if (q && !String(t.name).toLowerCase().includes(q) && String(t.id) !== keep) return;
     const opt = document.createElement("option");
     opt.value = t.id;
     opt.textContent = t.name;
     select.appendChild(opt);
   });
+  select.value = keep;
+  if (select.value !== keep) select.value = "0";
+}
+
+function filterTraitDropdown() {
+  const box = document.getElementById("personaTraitSearch");
+  populateTraitDropdown(box ? box.value : "");
+}
+
+// Sets the trait select from code: clears the search first so the option is guaranteed to exist.
+function setTraitValue(id) {
+  const box = document.getElementById("personaTraitSearch");
+  if (box) box.value = "";
+  const select = document.getElementById("personaTraitSelect");
+  if (!select) return;
+  populateTraitDropdown("");
+  select.value = String(id || 0);
 }
 
 // Elemental Affinities & Passive Calculation Engine
