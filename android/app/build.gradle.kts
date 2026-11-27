@@ -1,3 +1,4 @@
+import java.io.File
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
@@ -24,7 +25,7 @@ abstract class BundleBackendTask : DefaultTask() {
     fun bundle() {
         val root = repoRoot.get().asFile
         val out = outDir.get().asFile.also { it.mkdirs() }
-        ZipOutputStream(java.io.File(out, "p5r_backend.zip").outputStream().buffered()).use { zos ->
+        ZipOutputStream(File(out, "p5r_backend.zip").outputStream().buffered()).use { zos ->
             sources.files.filter { it.isFile }.sortedBy { it.invariantSeparatorsPath }.forEach { f ->
                 zos.putNextEntry(ZipEntry(f.relativeTo(root).invariantSeparatorsPath))
                 f.inputStream().use { it.copyTo(zos) }
