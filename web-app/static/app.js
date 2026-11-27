@@ -977,10 +977,50 @@ function maxLevelActiveMember() {
   saveCurrentDeckToActiveTarget();
 }
 
+const SKILL_EL_NAMES = {0:"Phys",1:"Gun",2:"Fire",3:"Ice",4:"Elec",5:"Wind",6:"Psy",7:"Nuke",8:"Bless",9:"Curse",10:"Almighty"};
+
+function buildSkillLabels() {
+  return (DB.skills || []).map((sk) => {
+    const meta = (DB.skill_meta || {})[sk.id];
+    let tag = "";
+    if (meta) {
+      const el = SKILL_EL_NAMES[meta.element] || (meta.element === 255 ? "—" : `E${meta.element}`);
+      const cost = meta.cost > 0 ? (meta.costtype === 1 ? ` ${meta.cost}% HP` : meta.costtype === 2 ? ` ${meta.cost} SP` : "") : "";
+      if (el !== "—" || cost) tag = ` [${el}${cost}]`;
+    }
+    return { id: sk.id, label: `${sk.name}${tag}`, search: `${sk.name}${tag} ${sk.id}`.toLowerCase() };
+  });
+}
+
+// Fills one skill <select>. The selected skill is always kept, so searching never changes a slot's value.
+function fillSkillSelect(select, labels, selectedId, query) {
+  const q = String(query || "").trim().toLowerCase();
+  let opts = `<option value="0">-- (Empty Skill) --</option>`;
+  labels.forEach((l) => {
+    if (q && !l.search.includes(q) && l.id !== selectedId) return;
+    opts += `<option value="${l.id}" ${l.id === selectedId ? "selected" : ""}>${l.label}</option>`;
+  });
+  select.innerHTML = opts;
+}
+
+function filterSkillDropdowns() {
+  const box = document.getElementById("skillSearch");
+  const q = box ? box.value : "";
+  const labels = buildSkillLabels();
+  for (let i = 0; i < 8; i++) {
+    const select = document.getElementById(`skillSlot_${i}`);
+    if (!select) continue;
+    fillSkillSelect(select, labels, parseInt(select.value) || 0, q);
+  }
+}
+
 function renderSkillsGrid(skills) {
   const container = document.getElementById("skillsGrid");
   if (!container) return;
   container.innerHTML = "";
+  const box = document.getElementById("skillSearch");
+  if (box) box.value = "";
+  const labels = buildSkillLabels();
 
   for (let i = 0; i < 8; i++) {
     const curSkillId = (skills && skills[i]) ? (typeof skills[i] === 'object' ? skills[i].id : skills[i]) : 0;
@@ -989,20 +1029,7 @@ function renderSkillsGrid(skills) {
     select.id = `skillSlot_${i}`;
     select.style.fontSize = "12px";
     select.onchange = () => saveCurrentDeckToActiveTarget();
-
-    const EL_NAMES = {0:"Phys",1:"Gun",2:"Fire",3:"Ice",4:"Elec",5:"Wind",6:"Psy",7:"Nuke",8:"Bless",9:"Curse",10:"Almighty"};
-    let opts = `<option value="0">-- (Empty Skill) --</option>`;
-    (DB.skills || []).forEach((sk) => {
-      const meta = (DB.skill_meta || {})[sk.id];
-      let tag = "";
-      if (meta) {
-        const el = EL_NAMES[meta.element] || (meta.element === 255 ? "—" : `E${meta.element}`);
-        const cost = meta.cost > 0 ? (meta.costtype === 1 ? ` ${meta.cost}% HP` : meta.costtype === 2 ? ` ${meta.cost} SP` : "") : "";
-        if (el !== "—" || cost) tag = ` [${el}${cost}]`;
-      }
-      opts += `<option value="${sk.id}" ${sk.id === curSkillId ? 'selected' : ''}>${sk.name}${tag}</option>`;
-    });
-    select.innerHTML = opts;
+    fillSkillSelect(select, labels, curSkillId, "");
     container.appendChild(select);
   }
 }
