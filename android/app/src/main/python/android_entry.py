@@ -45,6 +45,11 @@ def start(root: str, tmp_dir: str, token: str) -> int:
                     return False
                 return True
 
+            def end_headers(self):
+                # Assets are served from this same process; never let WebView reuse a stale copy after an update.
+                self.send_header("Cache-Control", "no-store")
+                super().end_headers()
+
         class _Server(ThreadingHTTPServer):
             allow_reuse_address = False
             daemon_threads = True
