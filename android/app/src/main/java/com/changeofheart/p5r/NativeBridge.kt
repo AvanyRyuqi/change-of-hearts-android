@@ -203,13 +203,11 @@ class NativeBridge(private val context: Context) {
             }
 
             val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
-            val backupDir = File(externalRoot(), "Download/ChangeOfHeart/backup")
-            if (!backupDir.isDirectory && !backupDir.mkdirs()) {
+            val bdir = backupDir()
+            if (!bdir.isDirectory && !bdir.mkdirs()) {
                 return fail("Could not create the backup folder. Nothing was written.")
             }
-            val tag = ((target.parentFile?.name ?: "save") + "_" + target.name)
-                .replace(Regex("[^A-Za-z0-9._-]"), "_")
-            val backup = File(backupDir, tag + "_" + stamp + ".bak")
+            val backup = File(bdir, backupTag(target) + "_" + stamp + ".bak")
             target.copyTo(backup, overwrite = false)
 
             target.outputStream().use { out ->
@@ -226,6 +224,77 @@ class NativeBridge(private val context: Context) {
                 put("ok", true)
                 put("backup", backup.name)
                 put("bytes", bytes.size)
+            }
+        } catch (e: Exception) {
+            fail(e.message ?: e.toString())
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Small key/value store (survives restarts; the WebView origin changes every launch)
+    // ------------------------------------------------------------------
+
+    @JavascriptInterface
+    fun getPref(key: String): String = prefs.getString("pref_" + key, null) ?: ""
+
+    @JavascriptInterface
+    fun setPref(key: String, value: String): String {
+        prefs.edit().putString("pref_" + key, value).apply()
+        return "ok"
+    }
+
+    // ------------------------------------------------------------------
+    // Backups made by writeSave (Download/ChangeOfHeart/backup)
+    // ------------------------------------------------------------------
+
+    private fun backupDir(): File = File(externalRoot(), "Download/ChangeOfHeart/backup")
+
+    private fun backupTag(target: File): String =
+        ((target.parentFile?.name ?: "save") + "_" + target.name).replace(Regex("[^A-Za-z0-9._-]"), "_")
+
+    /** Backups of one save file, newest first: {ok, backups:[{name, size, modified}]} */
+    @JavascriptInterface
+    fun listBackups(path: String): String {
+        if (!hasStorageAccess()) return fail("no_access")
+        return try {
+            val target = File(path)
+            if (!isAllowed(target)) return fail("Not allowed: $path")
+            val prefix = backupTag(target) + "_"
+            val files = (backupDir().listFiles() ?: emptyArray<File>())
+                .filter { it.isFile && it.name.startsWith(prefix) && it.name.endsWith(".bak") }
+                .sortedByDescending { it.lastModified() }
+                .take(50)
+            val arr = JSONArray()
+            for (f in files) {
+                val o = JSONObject()
+                o.put("name", f.name)
+                o.put("size", f.length())
+                o.put("modified", f.lastModified())
+                arr.put(o)
+            }
+            json {
+                put("ok", true)
+                put("backups", arr)
+            }
+        } catch (e: Exception) {
+            fail(e.message ?: e.toString())
+        }
+    }
+
+    /** Returns {ok, data(base64)} for one backup file name from the backup folder. */
+    @JavascriptInterface
+    fun readBackup(name: String): String {
+        if (!hasStorageAccess()) return fail("no_access")
+        return try {
+            if (name.contains("/") || name.contains("\\") || name.contains("..") || !name.endsWith(".bak")) {
+                return fail("Invalid backup name.")
+            }
+            val f = File(backupDir(), name)
+            if (!f.isFile || f.length() > MAX_BYTES) return fail("Backup not found.")
+            val b64 = Base64.encodeToString(f.readBytes(), Base64.NO_WRAP)
+            json {
+                put("ok", true)
+                put("data", b64)
             }
         } catch (e: Exception) {
             fail(e.message ?: e.toString())
