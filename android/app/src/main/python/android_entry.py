@@ -17,6 +17,9 @@ Android-only additions on top of the desktop handler (server.py stays untouched)
   * POST /api/inspect   - Time Machine: parse bytes into the same payload the
     editor loads, without touching the open save (used to compare snapshots).
   * GET /api/skill-info serves optional data/SkillInfo.json (skill descriptions) if present.
+  * GET /api/trait-info serves data/TraitInfo.json ({"<trait id>": "description"}) if present.
+  * POST /api/rawdiff   - compares the raw payload bytes of two saves (finds unmapped offsets,
+    e.g. Baton Pass level / Technical rank: change it in-game, snapshot, diff).
   * GET / injects /features.js before /android.js (Guardian, Time Machine,
     Quick Boosts, ...), so the desktop index.html does not need to change.
   * Unknown POST paths now get a 404 instead of a silently dropped connection.
@@ -39,7 +42,8 @@ _lock = threading.Lock()
 _state_lock = threading.RLock()
 
 _KNOWN_POST = {"/api/load", "/api/load-upload", "/api/save", "/api/restore"}
-_STATELESS_POST = {"/api/validate", "/api/inspect"}
+_OPTIONAL_DATA = {"/api/skill-info": "SkillInfo.json", "/api/trait-info": "TraitInfo.json"}
+_STATELESS_POST = {"/api/validate", "/api/inspect", "/api/rawdiff"}
 
 
 def start(root: str, tmp_dir: str, token: str) -> int:
@@ -60,7 +64,36 @@ def start(root: str, tmp_dir: str, token: str) -> int:
         import server as web_server  # heavy: builds the reference tables
 
         cookie_pair = "coh_token=" + token
-        feature_tag = '<script src="/features.js?v=1"></script>\n  '
+
+        def raw_diff(data):
+            """Byte ranges that differ between the decrypted payloads of two saves (max 500 ranges)."""
+            a = base64.b64decode(data.get("a", ""))
+            b = base64.b64decode(data.get("b", ""))
+            if not a or not b:
+                raise ValueError("Two saves are required.")
+            pa = bytes(web_server.SaveEditor(a).parser.data_payload)
+            pb = bytes(web_server.SaveEditor(b).parser.data_payload)
+            n = min(len(pa), len(pb))
+            ranges, total, i = [], 0, 0
+            while i < n:
+                if pa[i] == pb[i]:
+                    i += 1
+                    continue
+                start = last = i
+                j = i + 1
+                while j < n and j - last <= 4:  # merge changes that are at most 4 bytes apart
+                    if pa[j] != pb[j]:
+                        last = j
+                    j += 1
+                end = last + 1
+                total += sum(1 for k in range(start, end) if pa[k] != pb[k])
+                ranges.append({"off": start, "len": end - start,
+                               "a": pa[start:end][:32].hex(), "b": pb[start:end][:32].hex()})
+                i = end
+                if len(ranges) >= 500:
+                    break
+            return {"len_a": len(pa), "len_b": len(pb), "ranges": ranges,
+                    "truncated": len(ranges) >= 500, "changed_bytes": total}
 
         class GuardedHandler(web_server.P5RWebHandler):
             def parse_request(self):
@@ -80,9 +113,10 @@ def start(root: str, tmp_dir: str, token: str) -> int:
             # ---------------------------------------------------------- GET
             def do_GET(self):
                 path = urlparse(self.path).path
-                if path == "/api/skill-info" and self._origin_allowed():
-                    # Optional extra skill data: data/SkillInfo.json = {"<skill id>": {"desc": "...", "target": "..."}}
-                    info_file = web_server.PROJECT_ROOT / "data" / "SkillInfo.json"
+                if path in _OPTIONAL_DATA and self._origin_allowed():
+                    # Optional extra data files: SkillInfo.json = {"<skill id>": {"desc": "...", "target": "..."}},
+                    # TraitInfo.json = {"<trait id>": "description"}
+                    info_file = web_server.PROJECT_ROOT / "data" / _OPTIONAL_DATA[path]
                     body = info_file.read_bytes() if info_file.is_file() else b"{}"
                     self.send_response(200)
                     self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -101,7 +135,11 @@ def start(root: str, tmp_dir: str, token: str) -> int:
             def _serve_index(self):
                 template = web_server.WEB_APP_DIR / "templates" / "index.html"
                 html = template.read_text(encoding="utf-8")
-                features = web_server.WEB_APP_DIR / "static" / "features.js"
+                static = web_server.WEB_APP_DIR / "static"
+                features = static / "features.js"
+                feature_tag = '<script src="/features.js?v=1"></script>\n  '
+                if (static / "features2.js").is_file():
+                    feature_tag += '<script src="/features2.js?v=1"></script>\n  '
                 if features.is_file() and "/features.js" not in html:
                     # Must run BEFORE android.js: it wraps window.AndroidBridge before android.js captures it.
                     pat = re.compile(r'<script[^>]*src="/android\.js[^"]*"[^>]*></script>')
@@ -158,6 +196,9 @@ def start(root: str, tmp_dir: str, token: str) -> int:
                 validate = path == "/api/validate"
                 try:
                     data = json.loads(self._read_body().decode("utf-8") or "{}")
+                    if path == "/api/rawdiff":
+                        self.send_json(200, raw_diff(data))
+                        return
                     raw = base64.b64decode(data.get("data", ""))
                     if not raw:
                         raise ValueError("No file content.")
@@ -170,6 +211,8 @@ def start(root: str, tmp_dir: str, token: str) -> int:
                 except Exception as e:  # noqa: BLE001 - report to the UI, never crash the handler thread
                     if validate:
                         self.send_json(200, {"ok": False, "error": str(e)})
+                    elif path == "/api/rawdiff":
+                        self.send_json(500, {"error": "Raw diff failed: " + str(e)})
                     else:
                         self.send_json(500, {"error": "Could not read save: " + str(e)})
 
