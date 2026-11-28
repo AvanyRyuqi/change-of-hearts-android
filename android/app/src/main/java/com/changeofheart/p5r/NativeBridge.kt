@@ -1,5 +1,7 @@
 package com.changeofheart.p5r
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
@@ -15,12 +17,16 @@ import android.webkit.JavascriptInterface
 import android.widget.Toast
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.BufferedOutputStream
 import java.io.File
+import java.security.MessageDigest
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
 
-/** Exposed to the page as `AndroidBridge` (see web-app/static/android.js and save-folder code). */
+/** Exposed to the page as `AndroidBridge` (see web-app/static/android.js, features.js and save-folder code). */
 class NativeBridge(private val context: Context) {
 
     private fun toast(msg: String) {
@@ -74,6 +80,11 @@ class NativeBridge(private val context: Context) {
         put("ok", false)
         put("error", msg)
     }
+
+    private fun sha256(bytes: ByteArray): String =
+        MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
+
+    private fun stamp(): String = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
 
     @JavascriptInterface
     fun hasStorageAccess(): Boolean =
@@ -134,6 +145,14 @@ class NativeBridge(private val context: Context) {
         }
     }
 
+    /** Candidate save files under [dir] (up to 3 levels deep), shared by listSaves and backupAllSlots. */
+    private fun collectSaves(dir: File): List<File> =
+        dir.walkTopDown().maxDepth(3)
+            .filter { it.isFile && it.length() >= 1024 && it.extension.lowercase() !in IGNORED_EXT }
+            .sortedBy { it.relativeTo(dir).path.lowercase() }
+            .take(300)
+            .toList()
+
     /** Lists candidate save files (up to 3 levels deep) as JSON: {ok, root, files:[{path, rel, name, size, modified}]} */
     @JavascriptInterface
     fun listSaves(rootPath: String): String {
@@ -142,13 +161,8 @@ class NativeBridge(private val context: Context) {
             val root = rootPath.ifBlank { DEFAULT_ROOT }
             val dir = resolveDir(root) ?: return fail("Folder not found: $root")
             if (!isAllowed(dir)) return fail("That folder is outside shared storage.")
-            val files = dir.walkTopDown().maxDepth(3)
-                .filter { it.isFile && it.length() >= 1024 && it.extension.lowercase() !in IGNORED_EXT }
-                .sortedBy { it.relativeTo(dir).path.lowercase() }
-                .take(300)
-                .toList()
             val arr = JSONArray()
-            for (f in files) {
+            for (f in collectSaves(dir)) {
                 val o = JSONObject()
                 o.put("path", f.absolutePath)
                 o.put("rel", f.relativeTo(dir).path)
@@ -167,7 +181,7 @@ class NativeBridge(private val context: Context) {
         }
     }
 
-    /** Returns {ok, data(base64), size}. */
+    /** Returns {ok, data(base64), size, modified, sha}. The sha/modified pair is how Guardian spots outside changes. */
     @JavascriptInterface
     fun readSave(path: String): String {
         if (!hasStorageAccess()) return fail("no_access")
@@ -175,11 +189,33 @@ class NativeBridge(private val context: Context) {
             val f = File(path)
             if (!f.isFile || !isAllowed(f)) return fail("File not found or not allowed: $path")
             if (f.length() > MAX_BYTES) return fail("File is too large.")
-            val b64 = Base64.encodeToString(f.readBytes(), Base64.NO_WRAP)
+            val bytes = f.readBytes()
             json {
                 put("ok", true)
-                put("data", b64)
-                put("size", f.length())
+                put("data", Base64.encodeToString(bytes, Base64.NO_WRAP))
+                put("size", bytes.size)
+                put("modified", f.lastModified())
+                put("sha", sha256(bytes))
+            }
+        } catch (e: Exception) {
+            fail(e.message ?: e.toString())
+        }
+    }
+
+    /** Guardian: cheap fingerprint of a save file without sending its bytes to the page: {ok, size, modified, sha}. */
+    @JavascriptInterface
+    fun fileInfo(path: String): String {
+        if (!hasStorageAccess()) return fail("no_access")
+        return try {
+            val f = File(path)
+            if (!f.isFile || !isAllowed(f)) return fail("File not found or not allowed: $path")
+            if (f.length() > MAX_BYTES) return fail("File is too large.")
+            val bytes = f.readBytes()
+            json {
+                put("ok", true)
+                put("size", bytes.size)
+                put("modified", f.lastModified())
+                put("sha", sha256(bytes))
             }
         } catch (e: Exception) {
             fail(e.message ?: e.toString())
@@ -189,6 +225,9 @@ class NativeBridge(private val context: Context) {
     /**
      * Overwrites an EXISTING save file in place. Before touching it, the original is copied to
      * Download/ChangeOfHeart/backup/. If the backup cannot be made, nothing is written.
+     *
+     * Guardian: after writing, the file is read back and compared byte for byte with what was meant to
+     * be written. If the write failed or the file on disk differs, the original is restored from the backup.
      */
     @JavascriptInterface
     fun writeSave(path: String, base64: String): String {
@@ -202,21 +241,47 @@ class NativeBridge(private val context: Context) {
                 return fail("Refusing to write: unexpected size (${bytes.size} bytes).")
             }
 
-            val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
             val bdir = backupDir()
             if (!bdir.isDirectory && !bdir.mkdirs()) {
                 return fail("Could not create the backup folder. Nothing was written.")
             }
-            val backup = File(bdir, backupTag(target) + "_" + stamp + ".bak")
+            val backup = newBackupFile(bdir, backupTag(target))
             target.copyTo(backup, overwrite = false)
-
-            target.outputStream().use { out ->
-                out.write(bytes)
-                out.flush()
-                out.fd.sync()
+            if (backup.length() != target.length()) {
+                backup.delete()
+                return fail("Backup check failed (size mismatch). Nothing was written.")
             }
-            if (target.length() != bytes.size.toLong()) {
-                return fail("Write check failed (size mismatch). Original backup: ${backup.absolutePath}")
+
+            val writeError: String? = try {
+                target.outputStream().use { out ->
+                    out.write(bytes)
+                    out.flush()
+                    out.fd.sync()
+                }
+                null
+            } catch (e: Exception) {
+                e.message ?: e.toString()
+            }
+
+            val onDisk: ByteArray? = try {
+                target.readBytes()
+            } catch (e: Exception) {
+                null
+            }
+
+            if (writeError != null || onDisk == null || !onDisk.contentEquals(bytes)) {
+                val restored = try {
+                    backup.copyTo(target, overwrite = true)
+                    target.length() == backup.length()
+                } catch (e: Exception) {
+                    false
+                }
+                val why = writeError ?: "the file on disk differs from what was written"
+                return fail(
+                    "Write check failed ($why). " +
+                        if (restored) "The original file was restored from backup."
+                        else "COULD NOT RESTORE - the original is at ${backup.absolutePath}"
+                )
             }
 
             toast("Saved ${target.parentFile?.name}/${target.name} (backup in Download/ChangeOfHeart/backup)")
@@ -224,6 +289,9 @@ class NativeBridge(private val context: Context) {
                 put("ok", true)
                 put("backup", backup.name)
                 put("bytes", bytes.size)
+                put("sha", sha256(bytes))
+                put("modified", target.lastModified())
+                put("verified", true)
             }
         } catch (e: Exception) {
             fail(e.message ?: e.toString())
@@ -244,7 +312,8 @@ class NativeBridge(private val context: Context) {
     }
 
     // ------------------------------------------------------------------
-    // Backups made by writeSave (Download/ChangeOfHeart/backup)
+    // Backups made by writeSave + named snapshots (Download/ChangeOfHeart/backup)
+    // A snapshot is a normal .bak file plus an optional "<name>.bak.note" text file holding its label.
     // ------------------------------------------------------------------
 
     private fun backupDir(): File = File(externalRoot(), "Download/ChangeOfHeart/backup")
@@ -252,7 +321,37 @@ class NativeBridge(private val context: Context) {
     private fun backupTag(target: File): String =
         ((target.parentFile?.name ?: "save") + "_" + target.name).replace(Regex("[^A-Za-z0-9._-]"), "_")
 
-    /** Backups of one save file, newest first: {ok, backups:[{name, size, modified}]} */
+    /** A backup file name that does not exist yet (two writes within one second used to collide and fail). */
+    private fun newBackupFile(dir: File, tag: String): File {
+        val base = tag + "_" + stamp()
+        var f = File(dir, "$base.bak")
+        var n = 1
+        while (f.exists()) {
+            f = File(dir, "${base}_$n.bak")
+            n++
+        }
+        return f
+    }
+
+    private fun validBackupName(name: String): Boolean =
+        !(name.contains("/") || name.contains("\\") || name.contains("..") || !name.endsWith(".bak"))
+
+    private fun noteFile(backup: File): File = File(backup.parentFile, backup.name + ".note")
+
+    private fun readNote(backup: File): String = try {
+        val n = noteFile(backup)
+        if (n.isFile) n.readText(Charsets.UTF_8).trim() else ""
+    } catch (e: Exception) {
+        ""
+    }
+
+    private fun writeNote(backup: File, label: String) {
+        val clean = label.replace(Regex("[\\r\\n]+"), " ").trim().take(80)
+        val n = noteFile(backup)
+        if (clean.isEmpty()) n.delete() else n.writeText(clean, Charsets.UTF_8)
+    }
+
+    /** Backups of one save file, newest first: {ok, backups:[{name, size, modified, label}]} */
     @JavascriptInterface
     fun listBackups(path: String): String {
         if (!hasStorageAccess()) return fail("no_access")
@@ -263,13 +362,14 @@ class NativeBridge(private val context: Context) {
             val files = (backupDir().listFiles() ?: emptyArray<File>())
                 .filter { it.isFile && it.name.startsWith(prefix) && it.name.endsWith(".bak") }
                 .sortedByDescending { it.lastModified() }
-                .take(50)
+                .take(200)
             val arr = JSONArray()
             for (f in files) {
                 val o = JSONObject()
                 o.put("name", f.name)
                 o.put("size", f.length())
                 o.put("modified", f.lastModified())
+                o.put("label", readNote(f))
                 arr.put(o)
             }
             json {
@@ -286,9 +386,7 @@ class NativeBridge(private val context: Context) {
     fun readBackup(name: String): String {
         if (!hasStorageAccess()) return fail("no_access")
         return try {
-            if (name.contains("/") || name.contains("\\") || name.contains("..") || !name.endsWith(".bak")) {
-                return fail("Invalid backup name.")
-            }
+            if (!validBackupName(name)) return fail("Invalid backup name.")
             val f = File(backupDir(), name)
             if (!f.isFile || f.length() > MAX_BYTES) return fail("Backup not found.")
             val b64 = Base64.encodeToString(f.readBytes(), Base64.NO_WRAP)
@@ -301,9 +399,171 @@ class NativeBridge(private val context: Context) {
         }
     }
 
+    /** Time Machine: copies the save file as it is on disk right now into a named snapshot. */
+    @JavascriptInterface
+    fun createSnapshot(path: String, label: String): String {
+        if (!hasStorageAccess()) return fail("no_access")
+        return try {
+            val target = File(path)
+            if (!target.isFile || !isAllowed(target)) return fail("File not found or not allowed: $path")
+            val bdir = backupDir()
+            if (!bdir.isDirectory && !bdir.mkdirs()) return fail("Could not create the backup folder.")
+            val snap = newBackupFile(bdir, backupTag(target))
+            target.copyTo(snap, overwrite = false)
+            if (snap.length() != target.length()) {
+                snap.delete()
+                return fail("Snapshot check failed (size mismatch).")
+            }
+            writeNote(snap, label.ifBlank { "Snapshot" })
+            json {
+                put("ok", true)
+                put("name", snap.name)
+                put("modified", snap.lastModified())
+            }
+        } catch (e: Exception) {
+            fail(e.message ?: e.toString())
+        }
+    }
+
+    /** Sets (or clears, when blank) the label of a backup/snapshot. */
+    @JavascriptInterface
+    fun setBackupLabel(name: String, label: String): String {
+        if (!hasStorageAccess()) return fail("no_access")
+        return try {
+            if (!validBackupName(name)) return fail("Invalid backup name.")
+            val f = File(backupDir(), name)
+            if (!f.isFile) return fail("Backup not found.")
+            writeNote(f, label)
+            json { put("ok", true) }
+        } catch (e: Exception) {
+            fail(e.message ?: e.toString())
+        }
+    }
+
+    /** Deletes one backup/snapshot (and its label). Only ever called after the user confirms. */
+    @JavascriptInterface
+    fun deleteBackup(name: String): String {
+        if (!hasStorageAccess()) return fail("no_access")
+        return try {
+            if (!validBackupName(name)) return fail("Invalid backup name.")
+            val f = File(backupDir(), name)
+            if (!f.isFile) return fail("Backup not found.")
+            noteFile(f).delete()
+            if (!f.delete()) return fail("Could not delete the backup.")
+            json { put("ok", true) }
+        } catch (e: Exception) {
+            fail(e.message ?: e.toString())
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Backup of every slot into one dated ZIP in Downloads/ChangeOfHeart
+    // ------------------------------------------------------------------
+
+    @JavascriptInterface
+    fun backupAllSlots(rootPath: String): String {
+        if (!hasStorageAccess()) return fail("no_access")
+        return try {
+            val root = rootPath.ifBlank { DEFAULT_ROOT }
+            val dir = resolveDir(root) ?: return fail("Folder not found: $root")
+            if (!isAllowed(dir)) return fail("That folder is outside shared storage.")
+            val files = collectSaves(dir)
+            if (files.isEmpty()) return fail("No save files found to back up.")
+
+            val zipName = "ChangeOfHeart_AllSlots_" + stamp() + ".zip"
+            val values = ContentValues().apply {
+                put(MediaStore.Downloads.DISPLAY_NAME, zipName)
+                put(MediaStore.Downloads.MIME_TYPE, "application/zip")
+                put(MediaStore.Downloads.RELATIVE_PATH, "Download/ChangeOfHeart")
+                put(MediaStore.Downloads.IS_PENDING, 1)
+            }
+            val resolver = context.contentResolver
+            val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                ?: return fail("Could not create $zipName in Downloads.")
+
+            var written = 0
+            try {
+                val out = resolver.openOutputStream(uri) ?: throw IllegalStateException("Could not open $zipName.")
+                ZipOutputStream(BufferedOutputStream(out)).use { zip ->
+                    val manifest = StringBuilder("Change of Heart - all slots backup\n")
+                    manifest.append("Created: ").append(Date()).append("\nSource: ").append(dir.absolutePath).append("\n\n")
+                    for (f in files) {
+                        val rel = f.relativeTo(dir).path.replace('\\', '/')
+                        zip.putNextEntry(ZipEntry(rel))
+                        f.inputStream().use { it.copyTo(zip) }
+                        zip.closeEntry()
+                        manifest.append(rel).append("  ").append(f.length()).append(" bytes\n")
+                        written++
+                    }
+                    zip.putNextEntry(ZipEntry("_manifest.txt"))
+                    zip.write(manifest.toString().toByteArray(Charsets.UTF_8))
+                    zip.closeEntry()
+                }
+            } catch (e: Exception) {
+                resolver.delete(uri, null, null)
+                return fail("Could not write the ZIP: " + (e.message ?: e.toString()))
+            }
+
+            values.clear()
+            values.put(MediaStore.Downloads.IS_PENDING, 0)
+            resolver.update(uri, values, null, null)
+            toast("Backed up $written slot(s) to Downloads/ChangeOfHeart/$zipName")
+            json {
+                put("ok", true)
+                put("name", zipName)
+                put("files", written)
+            }
+        } catch (e: Exception) {
+            fail(e.message ?: e.toString())
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Share sheet / clipboard (preset sharing)
+    // ------------------------------------------------------------------
+
+    /** Opens the Android share sheet with plain text. Returns "ok" or an error line. */
+    @JavascriptInterface
+    fun shareText(subject: String, text: String): String {
+        return try {
+            val send = Intent(Intent.ACTION_SEND).apply {
+                type = "text/plain"
+                putExtra(Intent.EXTRA_SUBJECT, subject)
+                putExtra(Intent.EXTRA_TEXT, text)
+            }
+            val chooser = Intent.createChooser(send, subject).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(chooser)
+            "ok"
+        } catch (e: Exception) {
+            "Could not open the share sheet: " + (e.message ?: e.toString())
+        }
+    }
+
+    @JavascriptInterface
+    fun copyText(text: String): String {
+        return try {
+            val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            cm.setPrimaryClip(ClipData.newPlainText("Change of Heart", text))
+            "ok"
+        } catch (e: Exception) {
+            "Could not copy: " + (e.message ?: e.toString())
+        }
+    }
+
+    @JavascriptInterface
+    fun getClipboardText(): String {
+        return try {
+            val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            val clip = cm.primaryClip
+            if (clip != null && clip.itemCount > 0) clip.getItemAt(0).coerceToText(context).toString() else ""
+        } catch (e: Exception) {
+            ""
+        }
+    }
+
     private companion object {
         const val DEFAULT_ROOT = "/storage/emulated/0/Persona 5 Royal/user/save"
         const val MAX_BYTES = 32L * 1024 * 1024
-        val IGNORED_EXT = setOf("png", "jpg", "jpeg", "webp", "gif", "dds", "txt", "json", "log", "ini", "bak", "tmp", "xml", "zip")
+        val IGNORED_EXT = setOf("png", "jpg", "jpeg", "webp", "gif", "dds", "txt", "json", "log", "ini", "bak", "tmp", "xml", "zip", "note")
     }
 }
