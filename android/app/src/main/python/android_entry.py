@@ -22,6 +22,9 @@ Android-only additions on top of the desktop handler (server.py stays untouched)
     e.g. Baton Pass level / Technical rank: change it in-game, snapshot, diff).
   * GET / injects /features.js before /android.js (Guardian, Time Machine,
     Quick Boosts, ...), so the desktop index.html does not need to change.
+  * Battle ranks (Baton Pass per member, Technical rank, see core/battle.py): every loaded-save
+    payload gets a "battle" key, and POST /api/save writes it back (main copy + mirror) just
+    before the stock handler runs. GET / also injects /battle-ui.js, the card in Daily Life.
   * Unknown POST paths now get a 404 instead of a silently dropped connection.
   * Upload file names lose "(" and ")" - server.py builds "Uploaded (name)" and
     later strips every ")" to recover the name, which mangles "DATA (1).DAT".
@@ -62,6 +65,25 @@ def start(root: str, tmp_dir: str, token: str) -> int:
         from http.server import ThreadingHTTPServer
 
         import server as web_server  # heavy: builds the reference tables
+        from core.battle import get_battle_ranks, set_battle_ranks
+
+        # Add "battle" to every loaded-save payload (/api/load, /api/load-upload, /api/inspect)
+        # without editing server.py. Wrapped once, even if start() runs again after stop().
+        if not getattr(web_server._build_loaded_save_payload, "_battle_wrapped", False):
+            _stock_payload = web_server._build_loaded_save_payload
+
+            def _payload_with_battle(editor, file_path):
+                resp = _stock_payload(editor, file_path)
+                try:
+                    battle = get_battle_ranks(editor)
+                    if battle:
+                        resp["battle"] = battle
+                except Exception:  # noqa: BLE001 - an optional card must never break loading a save
+                    pass
+                return resp
+
+            _payload_with_battle._battle_wrapped = True
+            web_server._build_loaded_save_payload = _payload_with_battle
 
         cookie_pair = "coh_token=" + token
 
@@ -147,6 +169,8 @@ def start(root: str, tmp_dir: str, token: str) -> int:
                         html = pat.sub(lambda m: feature_tag + m.group(0), html, count=1)
                     else:
                         html = html.replace("</body>", feature_tag + "</body>", 1)
+                if (static / "battle-ui.js").is_file() and "/battle-ui.js" not in html:
+                    html = html.replace("</body>", '<script src="/battle-ui.js?v=1"></script>\n</body>', 1)
                 body = html.encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-type", "text/html; charset=utf-8")
@@ -165,6 +189,8 @@ def start(root: str, tmp_dir: str, token: str) -> int:
                     return
                 if path == "/api/load-upload":
                     self._sanitize_upload_name()
+                if path == "/api/save":
+                    self._apply_battle_ranks()
                 with _state_lock:
                     super().do_POST()
 
@@ -186,6 +212,22 @@ def start(root: str, tmp_dir: str, token: str) -> int:
                     self.headers.replace_header("Content-Length", str(len(body)))
                 else:
                     self.headers.add_header("Content-Length", str(len(body)))
+                self.rfile = io.BytesIO(body)
+
+            def _apply_battle_ranks(self):
+                """Write the posted Baton Pass / Technical ranks into the open save, then replay the body.
+
+                Runs right before the stock /api/save, which applies everything else and signs the file.
+                """
+                body = self._read_body()
+                try:
+                    battle = json.loads(body.decode("utf-8")).get("battle")
+                    with _state_lock:
+                        editor = web_server.CURRENT_EDITOR
+                        if isinstance(battle, dict) and editor is not None:
+                            set_battle_ranks(editor, battle.get("baton"), battle.get("technical"))
+                except Exception:
+                    pass  # the stock handler reports whatever is wrong with the body
                 self.rfile = io.BytesIO(body)
 
             def _stateless(self, path):
